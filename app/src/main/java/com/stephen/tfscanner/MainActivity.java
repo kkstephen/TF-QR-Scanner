@@ -79,7 +79,7 @@ public class MainActivity extends AppCompatActivity {
 
         String[] PERMISSIONS = { Manifest.permission.CAMERA };
 
-        if (!AllowUse(this, PERMISSIONS)) {
+        if (!IsAllow(this, PERMISSIONS)) {
             ActivityCompat.requestPermissions(this, PERMISSIONS, 1);
         }
     }
@@ -176,8 +176,6 @@ public class MainActivity extends AppCompatActivity {
         startActivity(intent);
     }
 
-
-    //camera
     private void initCamera()
     {
         this.cameraView.setSurfaceTextureListener( new TextureView.SurfaceTextureListener() {
@@ -206,9 +204,9 @@ public class MainActivity extends AppCompatActivity {
 
     private void openCamera()
     {
-        CameraManager cameraManager = (CameraManager) getSystemService(CAMERA_SERVICE);
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
-        int support = 0;
+        CameraManager cameraManager = (CameraManager) getSystemService(CAMERA_SERVICE);
 
         try {
             for (String id : cameraManager.getCameraIdList()) {
@@ -216,10 +214,14 @@ public class MainActivity extends AppCompatActivity {
 
                 if (charts.get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK) {
                     StreamConfigurationMap streamConfigurationMap = charts.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP);
-                    Size[] resolution = streamConfigurationMap.getOutputSizes(ImageFormat.YUV_420_888);
+                    Size[] resolutions = streamConfigurationMap.getOutputSizes(ImageFormat.YUV_420_888);
 
-                    previewSize = GetSize(resolution);
-                    support = charts.get(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL);
+                    previewSize = GetSize(resolutions);
+
+                    this.lbCode.setText(previewSize.getWidth() + "x" + previewSize.getHeight());
+
+                    //camera 2 API level
+                    //int support = charts.get(CameraCharacteristics.INFO_SUPPORTED_HARDWARE_LEVEL);
 
                     this.cameraId = id;
 
@@ -227,13 +229,9 @@ public class MainActivity extends AppCompatActivity {
                 }
             }
 
-            if (support < 2) {
-
-                if (ActivityCompat.checkSelfPermission(this, android.Manifest.permission.CAMERA)
-                        == PackageManager.PERMISSION_GRANTED) {
-                    //thread
-                    cameraManager.openCamera(this.cameraId, mCameraDeviceStateCallback, null);
-                }
+            if (ActivityCompat.checkSelfPermission(this, android.Manifest.permission.CAMERA)
+                    == PackageManager.PERMISSION_GRANTED) {
+                cameraManager.openCamera(this.cameraId, mCameraDeviceStateCallback, null);
             }
         }
         catch (CameraAccessException e) {
@@ -280,9 +278,7 @@ public class MainActivity extends AppCompatActivity {
                 buffer.get(data);
 
                 if (mLock.tryAcquire()) {
-                    updateHandler.post(() -> {
-                        decode(data);
-                    });
+                    updateHandler.post(() -> decode(data));
                 }
 
                 buffer.clear();
@@ -305,7 +301,7 @@ public class MainActivity extends AppCompatActivity {
             e.printStackTrace();
         }
 
-        cameraDevice.createCaptureSession(Arrays.asList(surface, imgSurface),  new CameraCaptureSession.StateCallback() {
+        cameraDevice.createCaptureSession(Arrays.asList(surface, imgSurface), new CameraCaptureSession.StateCallback() {
             @Override
             public void onConfigured(CameraCaptureSession session) {
                 if (cameraDevice == null) {
@@ -347,22 +343,18 @@ public class MainActivity extends AppCompatActivity {
 
         @Override
         public void onDisconnected(CameraDevice camera) {
-
             closeCamera();
         }
 
         @Override
         public void onError(CameraDevice camera, int error) {
-
             closeCamera();
         }
 
         @Override
-        public void onClosed(CameraDevice camera)
-        {
+        public void onClosed(CameraDevice camera) {
             super.onClosed(camera);
         }
-
     };
 
     private void decode(byte[] data) {
@@ -370,38 +362,33 @@ public class MainActivity extends AppCompatActivity {
         int wd = previewSize.getWidth();
         int ht = previewSize.getHeight();
 
-        YUVLuminanceSource source = new YUVLuminanceSource(data, wd, ht);
-        BinaryBitmap bmp = new BinaryBitmap(new HybridBinarizer(source));
+        YUVLuminanceSource img = new YUVLuminanceSource(data, wd, ht);
+        BinaryBitmap bmp = new BinaryBitmap(new HybridBinarizer(img));
 
         try
         {
-            Thread.sleep(500);
+            Thread.sleep(300);
 
             Result result = this.scanner.decode(bmp);
 
             //trim end of line
             qr_txt = result.getText().replaceAll("\\r\\n", "").replaceAll("\\n", "");
 
-            if (qr_txt != null && qr_txt != "") {
-                if (!qr_txt.equals(pre_code)) {
+            if (qr_txt != null && !qr_txt.equals(pre_code)) {
+                TagLabel t = new TagLabel(qr_txt, StringHelper.DateNow());
 
+                if (this.db.Add(t)) {
                     lbCode.setText(qr_txt);
-
-                    TagLabel lb = new TagLabel(qr_txt, StringHelper.DateNow());
-
-                    this.db.Add(lb);
 
                     //show focus
                     AFL.setAlpha(1f);
                     sound.start();
                 }
             }
-
-            pre_code = qr_txt;
         }
         catch (NotFoundException ef)
         {
-            pre_code = "";
+            qr_txt = "";
 
             if (AFL.getAlpha() == 1) {
                 AFL.setAlpha(0f);
@@ -409,7 +396,12 @@ public class MainActivity extends AppCompatActivity {
         }
         catch (Exception e) {
             ShowMessage("Error: " + e.getMessage());
+        } finally {
+            img = null;
+            bmp = null;
         }
+
+        pre_code = qr_txt;
 
         mLock.release();
     }
@@ -419,9 +411,13 @@ public class MainActivity extends AppCompatActivity {
         int max = 1920 * 1080;
 
         for (Size s : sizes) {
-            int q = s.getHeight() * s.getWidth();
+            int width = s.getWidth();
+            int height = s.getHeight();
 
-            if (q >= min && q < max) {
+            int q = width * height;
+            float n = width / height;
+
+            if (q >= min && q < max && n > 1.33) {
                 return s;
             }
         }
@@ -434,7 +430,7 @@ public class MainActivity extends AppCompatActivity {
         toast.show();
     }
 
-    public static boolean AllowUse(Context context, String... permissions) {
+    public static boolean IsAllow(Context context, String... permissions) {
         if (context != null && permissions != null) {
             for (String permission : permissions) {
                 if (ActivityCompat.checkSelfPermission(context, permission) != PackageManager.PERMISSION_GRANTED) {

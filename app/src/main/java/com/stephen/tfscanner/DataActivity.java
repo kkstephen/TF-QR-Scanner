@@ -89,7 +89,6 @@ public class DataActivity extends AppCompatActivity {
 
         this.repo.Close();
 
-
         super.onResume();
     }
 
